@@ -47,6 +47,10 @@ class GPT(nn.Module):
         """
         super().__init__()
 
+        # Optimize transformer operations for MPS
+        self.enable_packed_qkv = True  # More efficient attention computation
+        self.enable_packed_kv_cache = True 
+
         self.label_smoothing = label_smoothing
         self.number_text_tokens = number_text_tokens
         self.start_text_token = start_text_token
@@ -117,6 +121,20 @@ class GPT(nn.Module):
             self.prompt_embedding = nn.Embedding(self.num_audio_tokens, model_dim)
             self.prompt_pos_embedding = LearnedPositionEmbeddings(24 * 9, model_dim)
 
+    def _efficient_attention(self, q, k, v, mask=None):
+        # Optimized attention for MPS
+        if self.enable_packed_qkv and q.device.type == 'mps':
+            # Pack q,k,v into single tensor for more efficient compute
+            qkv = torch.stack([q, k, v], dim=1)
+            qkv = qkv.contiguous()
+            return torch.nn.functional.scaled_dot_product_attention(
+                qkv[:, 0], qkv[:, 1], qkv[:, 2], 
+                attn_mask=mask,
+                dropout_p=self.dropout if self.training else 0.0,
+            )
+        # Fallback to regular attention
+        return torch.nn.functional.scaled_dot_product_attention(q, k, v, mask)
+    
     def get_grad_norm_parameter_groups(self):
         return {
             "conditioning_encoder": list(self.conditioning_encoder.parameters()),

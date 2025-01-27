@@ -68,34 +68,54 @@ class HifiDecoder(torch.nn.Module):
     def device(self):
         return next(self.parameters()).device
 
-    def forward(self, latents, g=None):
+    def base_forward(self, latents, g=None):
         """
         Args:
-            x (Tensor): feature input tensor (GPT latent).
+            latents (Tensor): feature input tensor (GPT latent).
             g (Tensor): global conditioning input tensor.
 
         Returns:
-            Tensor: output waveform.
-
-        Shapes:
-            x: [B, C, T]
-            Tensor: [B, 1, T]
+            Tensor: output waveform (B,1,T).
         """
+        # Ensure tensors are contiguous for MPS performance
+        latents = latents.contiguous()
+        if g is not None:
+            g = g.contiguous()
 
         z = torch.nn.functional.interpolate(
             latents.transpose(1, 2),
             scale_factor=[self.ar_mel_length_compression / self.output_hop_length],
             mode="linear",
-        ).squeeze(1)
+        ) #.squeeze(1)
+        # print(f"After first interpolate shape: {z.shape}")
+        # z = z.squeeze(1)  # This was causing the issue with batches
+        # print(f"After first squeeze shape: {z.shape}")
         # upsample to the right sr
         if self.output_sample_rate != self.input_sample_rate:
             z = torch.nn.functional.interpolate(
                 z,
                 scale_factor=[self.output_sample_rate / self.input_sample_rate],
                 mode="linear",
-            ).squeeze(0)
+            ) #.squeeze(0)
+            # print(f"After second interpolate shape: {z.shape}")
+            # z = z.squeeze(0)  # This was also problematic for batches
+            # print(f"After second squeeze shape: {z.shape}")
         o = self.waveform_decoder(z, g=g)
         return o
+
+    @torch.inference_mode()
+    def forward(self, latents, g=None):
+        # Process in chunks for memory efficiency
+        # FIX: increase chunk_size to keep GPU busier
+        chunk_size = 1600000  # was 32000; now bigger to reduce overhead
+        if latents.shape[1] > chunk_size:
+            chunks = []
+            for i in range(0, latents.shape[1], chunk_size):
+                chunk = latents[:, i : i + chunk_size]
+                out_chunk = self.base_forward(chunk, g)
+                chunks.append(out_chunk)
+            return torch.cat(chunks, dim=2)
+        return self.base_forward(latents, g)
 
     @torch.inference_mode()
     def inference(self, c, g):
