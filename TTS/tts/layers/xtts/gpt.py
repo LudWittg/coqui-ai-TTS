@@ -127,13 +127,13 @@ class GPT(nn.Module):
             # Pack q,k,v into single tensor for more efficient compute
             qkv = torch.stack([q, k, v], dim=1)
             qkv = qkv.contiguous()
-            return torch.nn.functional.scaled_dot_product_attention(
+            return F.scaled_dot_product_attention(
                 qkv[:, 0], qkv[:, 1], qkv[:, 2], 
                 attn_mask=mask,
                 dropout_p=self.dropout if self.training else 0.0,
             )
         # Fallback to regular attention
-        return torch.nn.functional.scaled_dot_product_attention(q, k, v, mask)
+        return F.scaled_dot_product_attention(q, k, v, mask)
     
     def get_grad_norm_parameter_groups(self):
         return {
